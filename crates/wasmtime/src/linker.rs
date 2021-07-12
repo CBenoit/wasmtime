@@ -599,12 +599,45 @@ impl<T> Linker<T> {
         match ModuleKind::categorize(module)? {
             ModuleKind::Command => self.command(store, module_name, module),
             ModuleKind::Reactor => {
-                let instance = self.instantiate(&mut store, &module)?;
+                let instance = self.instantiate(&mut store, module)?;
 
                 if let Some(export) = instance.get_export(&mut store, "_initialize") {
                     if let Extern::Func(func) = export {
                         func.typed::<(), (), _>(&store)
                             .and_then(|f| f.call(&mut store, ()).map_err(Into::into))
+                            .context("calling the Reactor initialization function")?;
+                    }
+                }
+
+                self.instance(store, module_name, instance)
+            }
+        }
+    }
+
+    /// Define automatic instantiations of a [`Module`] in this linker.
+    ///
+    /// This is the same as [`Linker::module`], except for async `Store`s.
+    pub async fn module_async(
+        &mut self,
+        mut store: impl AsContextMut<Data = T>,
+        module_name: &str,
+        module: &Module,
+    ) -> Result<&mut Self>
+    where
+        T: Send + 'static,
+    {
+        match ModuleKind::categorize(module)? {
+            ModuleKind::Command => self.command(store, module_name, module),
+            ModuleKind::Reactor => {
+                let instance = self.instantiate_async(&mut store, module).await?;
+
+                if let Some(export) = instance.get_export(&mut store, "_initialize") {
+                    if let Extern::Func(func) = export {
+                        let f = func
+                            .typed::<(), (), _>(&store)
+                            .context("bad Reactor initialization function")?;
+                        f.call_async(&mut store, ())
+                            .await
                             .context("calling the Reactor initialization function")?;
                     }
                 }
